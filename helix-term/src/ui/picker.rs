@@ -66,6 +66,7 @@ pub type FileLocation = (PathOrId, Option<(usize, usize)>);
 pub struct FilePicker<T: Item> {
     picker: Picker<T>,
     pub truncate_start: bool,
+    pub retain_order: bool,
     /// Caches paths to documents
     preview_cache: HashMap<PathBuf, CachedPreview>,
     read_buffer: Vec<u8>,
@@ -118,12 +119,15 @@ impl<T: Item> FilePicker<T> {
         preview_fn: impl Fn(&Editor, &T) -> Option<FileLocation> + 'static,
     ) -> Self {
         let truncate_start = true;
+        let retain_order = false;
         let mut picker = Picker::new(options, editor_data, callback_fn);
         picker.truncate_start = truncate_start;
+        picker.retain_order = retain_order;
 
         Self {
             picker,
             truncate_start,
+            retain_order,
             preview_cache: HashMap::new(),
             read_buffer: Vec::with_capacity(1024),
             file_fn: Box::new(preview_fn),
@@ -133,6 +137,12 @@ impl<T: Item> FilePicker<T> {
     pub fn truncate_start(mut self, truncate_start: bool) -> Self {
         self.truncate_start = truncate_start;
         self.picker.truncate_start = truncate_start;
+        self
+    }
+
+    pub fn retain_order(mut self, retain_order: bool) -> Self {
+        self.retain_order = retain_order;
+        self.picker.retain_order = retain_order;
         self
     }
 
@@ -386,6 +396,8 @@ pub struct Picker<T: Item> {
     previous_pattern: String,
     /// Whether to truncate the start (default true)
     pub truncate_start: bool,
+    /// Whether to preserve relative ordering of options when filtering (default false)
+    pub retain_order: bool,
     /// Whether to show the preview panel (default true)
     show_preview: bool,
 
@@ -414,6 +426,7 @@ impl<T: Item> Picker<T> {
             prompt,
             previous_pattern: String::new(),
             truncate_start: true,
+            retain_order: false,
             show_preview: true,
             callback_fn: Box::new(callback_fn),
             completion_height: 0,
@@ -474,7 +487,11 @@ impl<T: Item> Picker<T> {
                 }
             });
 
-            self.matches.sort_unstable();
+            if self.retain_order {
+                self.matches.sort();
+            } else {
+                self.matches.sort_unstable();
+            }
         } else {
             self.force_score();
         }
@@ -509,7 +526,11 @@ impl<T: Item> Picker<T> {
                 }),
         );
 
-        self.matches.sort_unstable();
+        if self.retain_order {
+            self.matches.sort();
+        } else {
+            self.matches.sort_unstable();
+        }
     }
 
     /// Move the cursor by a number of lines, either down (`Forward`) or up (`Backward`)

@@ -55,7 +55,13 @@ use crate::{
 
 use crate::job::{self, Jobs};
 use futures_util::StreamExt;
-use std::{collections::HashMap, fmt, future::Future};
+use std::{
+    collections::HashMap,
+    fmt,
+    fs::File,
+    future::Future,
+    io::{BufRead, BufReader},
+};
 use std::{collections::HashSet, num::NonZeroUsize};
 
 use std::{
@@ -252,7 +258,8 @@ impl MappableCommand {
         extend_search_prev, "Add previous search match to selection",
         search_selection, "Use current selection as search pattern",
         make_search_word_bounded, "Modify current search to make it word bounded",
-        global_search, "Global search in workspace folder",
+        regex_search, "Global search in workspace folder",
+        fuzzy_search, "Fuzzy search in workspace folder",
         extend_line, "Select current line, if already selected, extend to another line based on the anchor",
         extend_line_below, "Select current line, if already selected, extend to next line",
         extend_line_above, "Select current line, if already selected, extend to previous line",
@@ -1838,42 +1845,219 @@ fn make_search_word_bounded(cx: &mut Context) {
     cx.editor.set_status(msg);
 }
 
-fn global_search(cx: &mut Context) {
-    #[derive(Debug)]
-    struct FileResult {
-        path: PathBuf,
-        /// 0 indexed lines
-        line_num: usize,
-    }
+#[derive(Debug)]
+struct FileResult {
+    path: PathBuf,
+    /// 0 indexed lines
+    line_num: usize,
+}
 
-    impl FileResult {
-        fn new(path: &Path, line_num: usize) -> Self {
-            Self {
-                path: path.to_path_buf(),
-                line_num,
-            }
+impl FileResult {
+    fn new(path: &Path, line_num: usize) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            line_num,
         }
     }
+}
 
-    impl ui::menu::Item for FileResult {
-        type Data = Option<PathBuf>;
+impl ui::menu::Item for FileResult {
+    type Data = Option<PathBuf>;
 
-        fn label(&self, current_path: &Self::Data) -> Spans {
-            let relative_path = helix_core::path::get_relative_path(&self.path)
-                .to_string_lossy()
-                .into_owned();
-            if current_path
-                .as_ref()
-                .map(|p| p == &self.path)
-                .unwrap_or(false)
-            {
-                format!("{} (*)", relative_path).into()
-            } else {
-                relative_path.into()
-            }
+    fn label(&self, current_path: &Self::Data) -> Spans {
+        let relative_path = helix_core::path::get_relative_path(&self.path)
+            .to_string_lossy()
+            .into_owned();
+        if current_path
+            .as_ref()
+            .map(|p| p == &self.path)
+            .unwrap_or(false)
+        {
+            format!("{} (*)", relative_path).into()
+        } else {
+            relative_path.into()
         }
     }
+}
 
+#[derive(Debug)]
+struct FuzzyResult {
+    file_result: FileResult,
+    score: i64,
+}
+
+impl ui::menu::Item for FuzzyResult {
+    type Data = <FileResult as ui::menu::Item>::Data;
+
+    fn label(&self, current_path: &Self::Data) -> Spans {
+        self.file_result.label(current_path)
+    }
+}
+
+impl From<FuzzyResult> for FileResult {
+    fn from(r: FuzzyResult) -> Self {
+        r.file_result
+    }
+}
+
+// TODO: refactor with regex_search
+fn fuzzy_search(cx: &mut Context) {
+    let (all_matches_sx, all_matches_rx) = tokio::sync::mpsc::unbounded_channel::<FuzzyResult>();
+    let config = cx.editor.config();
+    let file_picker_config = config.file_picker.clone();
+
+    let reg = cx.register.unwrap_or(';');
+
+    let completions = search_completions(cx, Some(reg));
+    ui::prompt(
+        cx,
+        "fuzzy-search:".into(),
+        Some(reg),
+        move |_editor: &Editor, input: &str| {
+            completions
+                .iter()
+                .filter(|comp| comp.starts_with(input))
+                .map(|comp| (0.., std::borrow::Cow::Owned(comp.clone())))
+                .collect()
+        },
+        move |_editor, pattern, event| {
+            if event != PromptEvent::Validate {
+                return;
+            }
+
+            static FUZZY_MATCHER: Lazy<fuzzy_matcher::skim::SkimMatcherV2> =
+                Lazy::new(fuzzy_matcher::skim::SkimMatcherV2::default);
+
+            let search_root =
+                std::env::current_dir().expect("Fuzzy search error: Failed to get current dir");
+            WalkBuilder::new(search_root)
+                .hidden(file_picker_config.hidden)
+                .parents(file_picker_config.parents)
+                .ignore(file_picker_config.ignore)
+                .follow_links(file_picker_config.follow_symlinks)
+                .git_ignore(file_picker_config.git_ignore)
+                .git_global(file_picker_config.git_global)
+                .git_exclude(file_picker_config.git_exclude)
+                .max_depth(file_picker_config.max_depth)
+                // We always want to ignore the .git directory, otherwise if
+                // `ignore` is turned off above, we end up with a lot of noise
+                // in our picker.
+                .filter_entry(|entry| entry.file_name() != ".git")
+                .build_parallel()
+                .run(|| {
+                    let all_matches_sx = all_matches_sx.clone();
+                    Box::new(move |entry: Result<DirEntry, ignore::Error>| -> WalkState {
+                        let entry = match entry {
+                            Ok(entry) => entry,
+                            Err(_) => return WalkState::Continue,
+                        };
+
+                        match entry.file_type() {
+                            Some(entry) if entry.is_file() => {}
+                            // skip everything else
+                            _ => return WalkState::Continue,
+                        };
+
+                        // Execute search over file and send to sink
+                        let path = entry.path();
+                        if let Ok(f) = File::open(path) {
+                            // Naive approach
+                            let mut buf = String::new();
+                            let mut line_count = 0;
+                            let mut rdr = BufReader::new(f);
+
+                            while let Ok(bytes) = rdr.read_line(&mut buf) {
+                                if bytes == 0 {
+                                    break;
+                                }
+
+                                if let Some(score) = FUZZY_MATCHER.fuzzy_match(&buf, pattern) {
+                                    all_matches_sx
+                                        .send(FuzzyResult {
+                                            file_result: FileResult::new(path, line_count),
+                                            score,
+                                        })
+                                        .unwrap();
+                                }
+
+                                buf.clear();
+                                line_count += 1;
+                            }
+                        } else {
+                            log::error!(
+                                "Failed to open file for fuzzy-search: {}",
+                                entry.path().display()
+                            );
+                        }
+
+                        WalkState::Continue
+                    })
+                });
+        },
+    );
+
+    let current_path = doc_mut!(cx.editor).path().cloned();
+
+    let show_picker = async move {
+        let all_matches: Vec<FileResult> = {
+            let mut matches: Vec<FuzzyResult> =
+                UnboundedReceiverStream::new(all_matches_rx).collect().await;
+            matches.sort_unstable_by(|a, b| {
+                if a.score == b.score {
+                    a.file_result.line_num.cmp(&b.file_result.line_num)
+                } else {
+                    std::cmp::Reverse(a.score).cmp(&std::cmp::Reverse(b.score))
+                }
+            });
+
+            matches.into_iter().map(FileResult::from).collect()
+        };
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if all_matches.is_empty() {
+                    editor.set_status("No matches found");
+                    return;
+                }
+
+                let picker = FilePicker::new(
+                    all_matches,
+                    current_path,
+                    move |cx, FileResult { path, line_num }, action| {
+                        match cx.editor.open(path, action) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                cx.editor.set_error(format!(
+                                    "Failed to open file '{}': {}",
+                                    path.display(),
+                                    e
+                                ));
+                                return;
+                            }
+                        }
+
+                        let line_num = *line_num;
+                        let (view, doc) = current!(cx.editor);
+                        let text = doc.text();
+                        let start = text.line_to_char(line_num);
+                        let end = text.line_to_char((line_num + 1).min(text.len_lines()));
+
+                        doc.set_selection(view.id, Selection::single(start, end));
+                        align_view(doc, view, Align::Center);
+                    },
+                    |_, FileResult { path, line_num }| {
+                        Some((path.clone().into(), Some((*line_num, *line_num))))
+                    },
+                )
+                .retain_order(true);
+                compositor.push(Box::new(overlayed(picker)));
+            },
+        ));
+        Ok(call)
+    };
+    cx.jobs.callback(show_picker);
+}
+
+fn regex_search(cx: &mut Context) {
     let (all_matches_sx, all_matches_rx) = tokio::sync::mpsc::unbounded_channel::<FileResult>();
     let config = cx.editor.config();
     let smart_case = config.search.smart_case;
@@ -1884,7 +2068,7 @@ fn global_search(cx: &mut Context) {
     let completions = search_completions(cx, Some(reg));
     ui::regex_prompt(
         cx,
-        "global-search:".into(),
+        "regex-search:".into(),
         Some(reg),
         move |_editor: &Editor, input: &str| {
             completions
