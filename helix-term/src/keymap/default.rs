@@ -261,7 +261,7 @@ pub fn default() -> HashMap<Mode, Keymap> {
             },
             "y" => yank_joined_to_clipboard,
             "Y" => yank_main_selection_to_clipboard,
-            "p" => paste_clipboard_after,
+            "p" => projects_picker,
             "P" => paste_clipboard_before,
             "R" => replace_selections_with_clipboard,
             "/" => regex_search,

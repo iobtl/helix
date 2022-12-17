@@ -1,14 +1,16 @@
 pub mod config;
 pub mod grammar;
 
+use anyhow::{anyhow, Context, Result};
 use etcetera::base_strategy::{choose_base_strategy, BaseStrategy};
-use std::path::PathBuf;
+use std::{collections::HashMap, io::Read, path::PathBuf};
 
 pub const VERSION_AND_GIT_HASH: &str = env!("VERSION_AND_GIT_HASH");
 
 pub static RUNTIME_DIR: once_cell::sync::Lazy<PathBuf> = once_cell::sync::Lazy::new(runtime_dir);
 
 static CONFIG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
+static PROJECTS_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
 
 pub fn initialize_config_file(specified_file: Option<PathBuf>) {
     let config_file = specified_file.unwrap_or_else(|| {
@@ -23,6 +25,21 @@ pub fn initialize_config_file(specified_file: Option<PathBuf>) {
 
     // We should only initialize this value once.
     CONFIG_FILE.set(config_file).ok();
+}
+
+pub fn initialize_projects_file(specified_file: Option<PathBuf>) {
+    let projects_file = specified_file.unwrap_or_else(|| {
+        let config_dir = config_dir();
+
+        if !config_dir.exists() {
+            std::fs::create_dir_all(&config_dir).ok();
+        }
+
+        config_dir.join("projects.toml")
+    });
+
+    // We should only initialize this value once.
+    PROJECTS_FILE.set(projects_file).ok();
 }
 
 pub fn runtime_dir() -> PathBuf {
@@ -90,6 +107,32 @@ pub fn lang_config_file() -> PathBuf {
 
 pub fn log_file() -> PathBuf {
     cache_dir().join("helix.log")
+}
+
+pub fn projects_file() -> PathBuf {
+    PROJECTS_FILE
+        .get()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| config_dir().join("projects.toml"))
+}
+
+pub fn load_projects() -> Result<HashMap<String, PathBuf>> {
+    let mut f = std::fs::File::options()
+        .append(true)
+        .create(true)
+        .read(true)
+        .open(projects_file())
+        .context(format!(
+            "Unable to open or create projects file at: {:?}",
+            projects_file().display(),
+        ))?;
+    let mut contents = String::new();
+    f.read_to_string(&mut contents)?;
+
+    toml::from_str(&contents).map_err(|e| {
+        log::error!("{}", e);
+        anyhow!("Failed to parse projects.toml")
+    })
 }
 
 pub fn find_local_config_dirs() -> Vec<PathBuf> {

@@ -125,6 +125,7 @@ FLAGS:
     }
 
     helix_loader::initialize_config_file(args.config_file.clone());
+    helix_loader::initialize_projects_file(args.projects_file.clone());
 
     let config = match std::fs::read_to_string(helix_loader::config_file()) {
         Ok(config) => toml::from_str(&config)

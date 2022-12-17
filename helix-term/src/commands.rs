@@ -3,6 +3,7 @@ pub(crate) mod lsp;
 pub(crate) mod typed;
 
 pub use dap::*;
+use helix_loader::load_projects;
 use helix_vcs::Hunk;
 pub use lsp::*;
 use tui::text::{Span, Spans};
@@ -358,6 +359,7 @@ impl MappableCommand {
         paste_clipboard_before, "Paste clipboard before selections",
         paste_primary_clipboard_after, "Paste primary clipboard after selections",
         paste_primary_clipboard_before, "Paste primary clipboard before selections",
+        projects_picker, "Open projects picker",
         indent, "Indent selection",
         unindent, "Unindent selection",
         format_selections, "Format selection",
@@ -2643,6 +2645,51 @@ fn jumplist_picker(cx: &mut Context) {
         },
     );
     cx.push_layer(Box::new(overlayed(picker)));
+}
+
+pub fn projects_picker(cx: &mut Context) {
+    match load_projects() {
+        Ok(projects) => {
+            struct Project {
+                name: String,
+                path: PathBuf,
+            }
+
+            impl ui::menu::Item for Project {
+                type Data = ();
+
+                fn label(&self, _data: &Self::Data) -> Spans {
+                    format!("{}: {}", self.name, self.path.display()).into()
+                }
+            }
+
+            if projects.is_empty() {
+                cx.editor.set_status("No projects found, closing picker");
+                return;
+            }
+
+            let picker = Picker::new(
+                projects
+                    .into_iter()
+                    .map(|(k, v)| Project { name: k, path: v })
+                    .collect(),
+                (),
+                |cx, project, _action| {
+                    if std::env::set_current_dir(&project.path).is_ok() {
+                        cx.editor
+                            .set_status(format!("Switched to project {}", project.name));
+                    } else {
+                        cx.editor.set_error(format!(
+                            "Unable to switch to project directory: {}",
+                            project.path.display()
+                        ));
+                    }
+                },
+            );
+            cx.push_layer(Box::new(overlayed(picker)));
+        }
+        Err(e) => cx.editor.set_error(e.to_string()),
+    }
 }
 
 impl ui::menu::Item for MappableCommand {

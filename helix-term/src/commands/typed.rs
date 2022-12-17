@@ -1,9 +1,10 @@
-use std::ops::Deref;
+use std::{io::Write, ops::Deref};
 
 use crate::job::Job;
 
 use super::*;
 
+use helix_loader::projects_file;
 use helix_view::{
     apply_transaction,
     editor::{Action, CloseError, ConfigEvent},
@@ -262,6 +263,45 @@ fn buffer_previous(
 
     goto_buffer(cx.editor, Direction::Backward);
     Ok(())
+}
+
+fn create_project(
+    cx: &mut compositor::Context,
+    args: &[Cow<str>],
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    ensure!(
+        args.len() <= 1,
+        ":create-project only takes at most one argument (the project name)"
+    );
+
+    // TODO: check git root
+    if let Ok(mut f) = std::fs::File::options()
+        .append(true)
+        .create(true)
+        .open(projects_file())
+    {
+        let cwd = std::env::current_dir().context("Couldn't get the new working directory")?;
+        let project_name = if let Some(s) = args.first() {
+            s.clone()
+        } else {
+            cwd.file_name().map(|s| s.to_string_lossy()).unwrap()
+        };
+
+        f.write(format!("{} = \"{}\"\n", project_name, cwd.display()).as_bytes())
+            .context("Unable to write to projects file")?;
+        cx.editor.set_status(format!(
+            "New project '{}' created from current working directory",
+            project_name
+        ));
+        Ok(())
+    } else {
+        bail!("Couldn't open projects file at {:?}", projects_file());
+    }
 }
 
 fn write_impl(
@@ -1884,6 +1924,13 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             aliases: &["bp", "bprev"],
             doc: "Goto previous buffer.",
             fun: buffer_previous,
+            completer: None,
+        },
+        TypableCommand {
+            name: "create-project",
+            aliases: &["cp"]  ,
+            doc: "Create project in current working directory.",
+            fun: create_project,
             completer: None,
         },
         TypableCommand {
