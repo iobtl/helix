@@ -49,6 +49,7 @@
 use helix_core::line_ending::str_is_line_ending;
 use helix_core::unicode::width::UnicodeWidthStr;
 use helix_view::graphics::Style;
+use helix_view::theme::Modifier;
 use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -104,6 +105,16 @@ impl<'a> Span<'a> {
         Span {
             content: content.into(),
             style,
+        }
+    }
+
+    pub fn bold<T>(content: T) -> Span<'a>
+    where
+        T: Into<Cow<'a, str>>,
+    {
+        Span {
+            content: content.into(),
+            style: Style::default().add_modifier(Modifier::BOLD),
         }
     }
 

@@ -5,7 +5,7 @@ pub(crate) mod typed;
 pub use dap::*;
 use helix_vcs::Hunk;
 pub use lsp::*;
-use tui::text::Spans;
+use tui::text::{Span, Spans};
 pub use typed::*;
 
 use helix_core::{
@@ -1859,12 +1859,8 @@ impl FileResult {
             line_num,
         }
     }
-}
 
-impl ui::menu::Item for FileResult {
-    type Data = Option<PathBuf>;
-
-    fn label(&self, current_path: &Self::Data) -> Spans {
+    fn label_string(&self, current_path: &<Self as ui::menu::Item>::Data) -> String {
         let relative_path = helix_core::path::get_relative_path(&self.path)
             .to_string_lossy()
             .into_owned();
@@ -1873,16 +1869,25 @@ impl ui::menu::Item for FileResult {
             .map(|p| p == &self.path)
             .unwrap_or(false)
         {
-            format!("{} (*)", relative_path).into()
+            format!("{} (*)", relative_path)
         } else {
-            relative_path.into()
+            relative_path
         }
+    }
+}
+
+impl ui::menu::Item for FileResult {
+    type Data = Option<PathBuf>;
+
+    fn label(&self, current_path: &Self::Data) -> Spans {
+        self.label_string(current_path).into()
     }
 }
 
 #[derive(Debug)]
 struct FuzzyResult {
     file_result: FileResult,
+    line: String,
     score: i64,
 }
 
@@ -1890,13 +1895,10 @@ impl ui::menu::Item for FuzzyResult {
     type Data = <FileResult as ui::menu::Item>::Data;
 
     fn label(&self, current_path: &Self::Data) -> Spans {
-        self.file_result.label(current_path)
-    }
-}
+        let file_component = self.file_result.label_string(current_path);
+        let line_component = format!(": {}", &self.line);
 
-impl From<FuzzyResult> for FileResult {
-    fn from(r: FuzzyResult) -> Self {
-        r.file_result
+        vec![Span::bold(file_component), line_component.into()].into()
     }
 }
 
@@ -1975,6 +1977,7 @@ fn fuzzy_search(cx: &mut Context) {
                                     all_matches_sx
                                         .send(FuzzyResult {
                                             file_result: FileResult::new(path, line_count),
+                                            line: buf.clone(),
                                             score,
                                         })
                                         .unwrap();
@@ -1999,7 +2002,7 @@ fn fuzzy_search(cx: &mut Context) {
     let current_path = doc_mut!(cx.editor).path().cloned();
 
     let show_picker = async move {
-        let all_matches: Vec<FileResult> = {
+        let all_matches = {
             let mut matches: Vec<FuzzyResult> =
                 UnboundedReceiverStream::new(all_matches_rx).collect().await;
             matches.sort_unstable_by(|a, b| {
@@ -2010,7 +2013,7 @@ fn fuzzy_search(cx: &mut Context) {
                 }
             });
 
-            matches.into_iter().map(FileResult::from).collect()
+            matches
         };
         let call: job::Callback = Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, compositor: &mut Compositor| {
@@ -2022,7 +2025,12 @@ fn fuzzy_search(cx: &mut Context) {
                 let picker = FilePicker::new(
                     all_matches,
                     current_path,
-                    move |cx, FileResult { path, line_num }, action| {
+                    move |cx,
+                          FuzzyResult {
+                              file_result: FileResult { path, line_num },
+                              ..
+                          },
+                          action| {
                         match cx.editor.open(path, action) {
                             Ok(_) => {}
                             Err(e) => {
@@ -2044,10 +2052,15 @@ fn fuzzy_search(cx: &mut Context) {
                         doc.set_selection(view.id, Selection::single(start, end));
                         align_view(doc, view, Align::Center);
                     },
-                    |_, FileResult { path, line_num }| {
+                    |_,
+                     FuzzyResult {
+                         file_result: FileResult { path, line_num },
+                         ..
+                     }| {
                         Some((path.clone().into(), Some((*line_num, *line_num))))
                     },
                 )
+                .truncate_start(false)
                 .retain_order(true);
                 compositor.push(Box::new(overlayed(picker)));
             },
