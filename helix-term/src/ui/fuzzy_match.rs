@@ -35,6 +35,13 @@ impl FuzzyQuery {
         // use the rank of the first query for the rank, because merging ranks is not really possible
         // this behaviour matches fzf and skim
         let score = matcher.fuzzy_match(item, self.queries.get(0)?)?;
+
+        // fast path for the common case of not using a space
+        // during matching this branch should be free thanks to branch prediction
+        if self.queries.len() == 1 {
+            return Some(score);
+        }
+
         if self
             .queries
             .iter()
@@ -42,6 +49,7 @@ impl FuzzyQuery {
         {
             return None;
         }
+
         Some(score)
     }
 
