@@ -1861,8 +1861,12 @@ impl FileResult {
             line_num,
         }
     }
+}
 
-    fn label_string(&self, current_path: &<Self as ui::menu::Item>::Data) -> String {
+impl ui::menu::Item for FileResult {
+    type Data = Option<PathBuf>;
+
+    fn label(&self, current_path: &Self::Data) -> Spans {
         let relative_path = helix_core::path::get_relative_path(&self.path)
             .to_string_lossy()
             .into_owned();
@@ -1871,18 +1875,10 @@ impl FileResult {
             .map(|p| p == &self.path)
             .unwrap_or(false)
         {
-            format!("{} (*)", relative_path)
+            format!("{} (*)", relative_path).into()
         } else {
-            relative_path
+            relative_path.into()
         }
-    }
-}
-
-impl ui::menu::Item for FileResult {
-    type Data = Option<PathBuf>;
-
-    fn label(&self, current_path: &Self::Data) -> Spans {
-        self.label_string(current_path).into()
     }
 }
 
@@ -1896,8 +1892,8 @@ struct FuzzyResult {
 impl ui::menu::Item for FuzzyResult {
     type Data = <FileResult as ui::menu::Item>::Data;
 
-    fn label(&self, current_path: &Self::Data) -> Spans {
-        let file_component = self.file_result.label_string(current_path);
+    fn label(&self, _current_path: &Self::Data) -> Spans {
+        let file_component = self.file_result.path.to_string_lossy();
         let line_component = format!(": {}", &self.line);
 
         vec![Span::bold(file_component), line_component.into()].into()
