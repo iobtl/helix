@@ -2668,24 +2668,26 @@ pub fn projects_picker(cx: &mut Context) {
                 return;
             }
 
-            let picker = Picker::new(
-                projects
+            let projects = {
+                let mut projects: Vec<Project> = projects
                     .into_iter()
                     .map(|(k, v)| Project { name: k, path: v })
-                    .collect(),
-                (),
-                |cx, project, _action| {
-                    if std::env::set_current_dir(&project.path).is_ok() {
-                        cx.editor
-                            .set_status(format!("Switched to project {}", project.name));
-                    } else {
-                        cx.editor.set_error(format!(
-                            "Unable to switch to project directory: {}",
-                            project.path.display()
-                        ));
-                    }
-                },
-            );
+                    .collect();
+
+                projects.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+                projects
+            };
+            let picker = Picker::new(projects, (), |cx, project, _action| {
+                if std::env::set_current_dir(&project.path).is_ok() {
+                    cx.editor
+                        .set_status(format!("Switched to project {}", project.name));
+                } else {
+                    cx.editor.set_error(format!(
+                        "Unable to switch to project directory: {}",
+                        project.path.display()
+                    ));
+                }
+            });
             cx.push_layer(Box::new(overlayed(picker)));
         }
         Err(e) => cx.editor.set_error(e.to_string()),
