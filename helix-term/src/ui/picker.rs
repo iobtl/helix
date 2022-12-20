@@ -360,6 +360,7 @@ struct PickerMatch {
     score: i64,
     index: usize,
     len: usize,
+    fuzzy_indices: Vec<usize>,
 }
 
 impl PickerMatch {
@@ -442,6 +443,7 @@ impl<T: Item> Picker<T> {
                     index,
                     score: 0,
                     len: text.chars().count(),
+                    fuzzy_indices: Vec::new(),
                 }
             }));
 
@@ -467,6 +469,7 @@ impl<T: Item> Picker<T> {
                         index,
                         score: 0,
                         len: text.chars().count(),
+                        fuzzy_indices: Vec::new(),
                     }
                 }));
         } else if pattern.starts_with(&self.previous_pattern) {
@@ -477,10 +480,12 @@ impl<T: Item> Picker<T> {
                 let option = &self.options[pmatch.index];
                 let text = option.sort_text(&self.editor_data);
 
-                match query.fuzzy_match(&text, &self.matcher) {
-                    Some(s) => {
+                match query.fuzzy_indices(&text, &self.matcher) {
+                    Some((s, mut indices)) => {
                         // Update the score
                         pmatch.score = s;
+                        pmatch.fuzzy_indices.clear();
+                        pmatch.fuzzy_indices.append(&mut indices);
                         true
                     }
                     None => false,
@@ -517,11 +522,12 @@ impl<T: Item> Picker<T> {
                     let text = option.filter_text(&self.editor_data);
 
                     query
-                        .fuzzy_match(&text, &self.matcher)
-                        .map(|score| PickerMatch {
+                        .fuzzy_indices(&text, &self.matcher)
+                        .map(|(score, indices)| PickerMatch {
                             index,
                             score,
                             len: text.chars().count(),
+                            fuzzy_indices: indices,
                         })
                 }),
         );
@@ -718,13 +724,14 @@ impl<T: Item + 'static> Component for Picker<T> {
         let rows = inner.height;
         let offset = self.cursor - (self.cursor % std::cmp::max(1, rows as usize));
 
-        let files = self
-            .matches
-            .iter()
-            .skip(offset)
-            .map(|pmatch| (pmatch.index, self.options.get(pmatch.index).unwrap()));
+        let files = self.matches.iter().skip(offset).map(|pmatch| {
+            (
+                self.options.get(pmatch.index).unwrap(),
+                &pmatch.fuzzy_indices,
+            )
+        });
 
-        for (i, (_index, option)) in files.take(rows as usize).enumerate() {
+        for (i, (option, highlights)) in files.take(rows as usize).enumerate() {
             let is_active = i == (self.cursor - offset);
             if is_active {
                 surface.set_string(
@@ -739,33 +746,31 @@ impl<T: Item + 'static> Component for Picker<T> {
                 );
             }
 
-            let spans = option.label(&self.editor_data);
-            let (_score, highlights) = FuzzyQuery::new(self.prompt.line())
-                .fuzzy_indicies(&String::from(&spans), &self.matcher)
-                .unwrap_or_default();
-
-            spans.0.into_iter().fold(inner, |pos, span| {
-                let new_x = surface
-                    .set_string_truncated(
-                        pos.x,
-                        pos.y + i as u16,
-                        &span.content,
-                        pos.width as usize,
-                        |idx| {
-                            if highlights.contains(&idx) {
-                                highlighted.patch(span.style)
-                            } else if is_active {
-                                selected.patch(span.style)
-                            } else {
-                                text_style.patch(span.style)
-                            }
-                        },
-                        true,
-                        self.truncate_start,
-                    )
-                    .0;
-                pos.clip_left(new_x - pos.x)
-            });
+            option
+                .label(&self.editor_data)
+                .into_iter()
+                .fold(inner, |pos, span| {
+                    let new_x = surface
+                        .set_string_truncated(
+                            pos.x,
+                            pos.y + i as u16,
+                            &span.content,
+                            pos.width as usize,
+                            |idx| {
+                                if highlights.contains(&idx) {
+                                    highlighted.patch(span.style)
+                                } else if is_active {
+                                    selected.patch(span.style)
+                                } else {
+                                    text_style.patch(span.style)
+                                }
+                            },
+                            true,
+                            self.truncate_start,
+                        )
+                        .0;
+                    pos.clip_left(new_x - pos.x)
+                });
         }
     }
 

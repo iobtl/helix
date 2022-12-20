@@ -242,6 +242,15 @@ impl<'a> Spans<'a> {
     }
 }
 
+impl<'a> IntoIterator for Spans<'a> {
+    type Item = Span<'a>;
+    type IntoIter = std::vec::IntoIter<Span<'a>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 impl<'a> From<String> for Spans<'a> {
     fn from(s: String) -> Spans<'a> {
         Spans(vec![Span::from(s)])

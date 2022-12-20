@@ -53,30 +53,30 @@ impl FuzzyQuery {
         Some(score)
     }
 
-    pub fn fuzzy_indicies(&self, item: &str, matcher: &Matcher) -> Option<(i64, Vec<usize>)> {
+    pub fn fuzzy_indices(&self, item: &str, matcher: &Matcher) -> Option<(i64, Vec<usize>)> {
         if self.queries.len() == 1 {
             return matcher.fuzzy_indices(item, &self.queries[0]);
         }
 
         // use the rank of the first query for the rank, because merging ranks is not really possible
         // this behaviour matches fzf and skim
-        let (score, mut indicies) = matcher.fuzzy_indices(item, self.queries.get(0)?)?;
+        let (score, mut indices) = matcher.fuzzy_indices(item, self.queries.get(0)?)?;
 
         // fast path for the common case of not using a space
         // during matching this branch should be free thanks to branch prediction
         if self.queries.len() == 1 {
-            return Some((score, indicies));
+            return Some((score, indices));
         }
 
         for query in &self.queries[1..] {
             let (_, matched_indicies) = matcher.fuzzy_indices(item, query)?;
-            indicies.extend_from_slice(&matched_indicies);
+            indices.extend_from_slice(&matched_indicies);
         }
 
         // deadup and remove duplicate matches
-        indicies.sort_unstable();
-        indicies.dedup();
+        indices.sort_unstable();
+        indices.dedup();
 
-        Some((score, indicies))
+        Some((score, indices))
     }
 }
