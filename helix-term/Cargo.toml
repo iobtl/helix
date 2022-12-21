@@ -55,6 +55,7 @@ log = "0.4"
 # File picker
 fuzzy-matcher = "0.3"
 ignore = "0.4"
+num_cpus = "1.15.0"
 # markdown doc rendering
 pulldown-cmark = { version = "0.9", default-features = false }
 # file type detection

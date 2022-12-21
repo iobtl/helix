@@ -1939,6 +1939,7 @@ fn fuzzy_search(cx: &mut Context) {
                 .git_global(file_picker_config.git_global)
                 .git_exclude(file_picker_config.git_exclude)
                 .max_depth(file_picker_config.max_depth)
+                .threads(num_cpus::get())
                 // We always want to ignore the .git directory, otherwise if
                 // `ignore` is turned off above, we end up with a lot of noise
                 // in our picker.
@@ -2112,6 +2113,7 @@ fn regex_search(cx: &mut Context) {
                     .git_global(file_picker_config.git_global)
                     .git_exclude(file_picker_config.git_exclude)
                     .max_depth(file_picker_config.max_depth)
+                    .threads(num_cpus::get())
                     // We always want to ignore the .git directory, otherwise if
                     // `ignore` is turned off above, we end up with a lot of noise
                     // in our picker.
